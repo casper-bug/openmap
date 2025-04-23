@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>OSM Navigation with Step-by-Step Directions</title>
+    <title>Complete OSM Navigation with Live GPS</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
@@ -72,10 +72,6 @@
             border-radius: 4px;
             cursor: pointer;
             margin-bottom: 5px;
-        }
-        
-        .route-btn:hover {
-            background: #45a049;
         }
         
         .nav-btn {
@@ -230,12 +226,58 @@
             border: 2px solid white;
             box-shadow: 0 0 5px rgba(0,0,0,0.3);
         }
+        
+        .gps-accuracy {
+            position: absolute;
+            bottom: 60px;
+            left: 10px;
+            background: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            font-size: 12px;
+            display: none;
+        }
+        
+        /* GPS position marker */
+        .gps-marker {
+            background: #4285F4;
+            border-radius: 50%;
+            border: 2px solid white;
+            width: 20px;
+            height: 20px;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+        
+        .gps-marker::after {
+            content: "";
+            position: absolute;
+            top: -8px;
+            left: -8px;
+            width: 30px;
+            height: 30px;
+            border: 2px solid #4285F4;
+            border-radius: 50%;
+            opacity: 0.3;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(0.8); opacity: 0.3; }
+            70% { transform: scale(1.3); opacity: 0; }
+            100% { transform: scale(0.8); opacity: 0; }
+        }
     </style>
 </head>
 <body>
     <div id="map"></div>
     
     <div class="map-controls">
+        <button id="gps-track" class="control-btn">
+            <i class="fas fa-location-arrow"></i>
+            <span>Follow Me</span>
+        </button>
+        
         <button id="theme-toggle" class="control-btn">
             <i class="fas fa-moon"></i>
             <span>Night Mode</span>
@@ -285,27 +327,20 @@
     <div class="navigation-popup" id="navigation-popup">
         <div class="nav-popup-header">
             <div class="nav-popup-title">Navigation</div>
-            <div class="nav-popup-close" id="nav-popup-close">
-                <i class="fas fa-times"></i>
-            </div>
+            <div class="nav-popup-distance" id="nav-distance"></div>
         </div>
-        <div class="nav-popup-content" id="nav-popup-content">
-            Follow the route to your destination
-        </div>
-        <div class="nav-popup-distance" id="nav-popup-distance">
-            0 km to next step
+        <div class="nav-popup-content" id="nav-instruction">
+            Ready to navigate to your destination
         </div>
         <div class="nav-popup-actions">
-            <button class="nav-action-btn nav-prev-btn" id="nav-prev-btn">
-                <i class="fas fa-arrow-left"></i> Previous
-            </button>
             <button class="nav-action-btn nav-stop-btn" id="nav-stop-btn">
-                <i class="fas fa-stop"></i> Stop
-            </button>
-            <button class="nav-action-btn nav-next-btn" id="nav-next-btn">
-                Next <i class="fas fa-arrow-right"></i>
+                <i class="fas fa-stop"></i> Stop Navigation
             </button>
         </div>
+    </div>
+    
+    <div class="gps-accuracy" id="gps-accuracy">
+        GPS Accuracy: <span id="accuracy-value">0</span> meters
     </div>
 
     <script>
@@ -351,21 +386,23 @@
         });
         map.addLayer(markersLayer);
         
-        // Current position marker
-        const currentPositionMarker = new ol.Overlay({
+        // GPS position marker
+        const gpsMarker = new ol.Overlay({
             positioning: 'center-center',
             element: document.createElement('div'),
             stopEvent: false
         });
-        currentPositionMarker.getElement().className = 'current-position-marker';
-        map.addOverlay(currentPositionMarker);
+        gpsMarker.getElement().className = 'gps-marker';
+        map.addOverlay(gpsMarker);
         
-        // Route planning variables
+        // Navigation variables
         let fromLocation = null;
         let toLocation = null;
         let routeData = null;
-        let currentStepIndex = 0;
         let isNavigating = false;
+        let watchId = null;
+        let currentPosition = null;
+        let isTracking = false;
         
         // DOM elements
         const fromInput = document.getElementById('from-input');
@@ -380,12 +417,14 @@
         const routeSummary = document.getElementById('route-summary');
         const routeInstructions = document.getElementById('route-instructions');
         const navPopup = document.getElementById('navigation-popup');
-        const navPopupContent = document.getElementById('nav-popup-content');
-        const navPopupDistance = document.getElementById('nav-popup-distance');
-        const navPopupClose = document.getElementById('nav-popup-close');
-        const navPrevBtn = document.getElementById('nav-prev-btn');
-        const navNextBtn = document.getElementById('nav-next-btn');
+        const navInstruction = document.getElementById('nav-instruction');
+        const navDistance = document.getElementById('nav-distance');
         const navStopBtn = document.getElementById('nav-stop-btn');
+        const gpsTrackBtn = document.getElementById('gps-track');
+        const gpsAccuracy = document.getElementById('gps-accuracy');
+        const accuracyValue = document.getElementById('accuracy-value');
+        const themeToggle = document.getElementById('theme-toggle');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
         
         // Debounce function to limit API calls
         function debounce(func, timeout = 500) {
@@ -394,6 +433,90 @@
                 clearTimeout(timer);
                 timer = setTimeout(() => { func.apply(this, args); }, timeout);
             };
+        }
+        
+        // Get current GPS position
+        function getCurrentPosition() {
+            return new Promise((resolve, reject) => {
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        position => resolve(position),
+                        error => reject(error),
+                        { enableHighAccuracy: true }
+                    );
+                } else {
+                    reject(new Error('Geolocation is not supported by this browser'));
+                }
+            });
+        }
+        
+        // Watch GPS position
+        function watchPosition(callback) {
+            if (navigator.geolocation) {
+                return navigator.geolocation.watchPosition(
+                    position => callback(position),
+                    error => console.error('Geolocation error:', error),
+                    { 
+                        enableHighAccuracy: true,
+                        maximumAge: 30000,
+                        timeout: 27000
+                    }
+                );
+            }
+            return null;
+        }
+        
+        // Start GPS tracking
+        function startTracking() {
+            isTracking = true;
+            gpsTrackBtn.innerHTML = '<i class="fas fa-location-arrow"></i><span>Following</span>';
+            gpsAccuracy.style.display = 'block';
+            
+            watchId = watchPosition(position => {
+                currentPosition = position;
+                const coords = ol.proj.fromLonLat([
+                    position.coords.longitude,
+                    position.coords.latitude
+                ]);
+                
+                // Update GPS marker
+                gpsMarker.setPosition(coords);
+                
+                // Update accuracy display
+                accuracyValue.textContent = Math.round(position.coords.accuracy);
+                
+                // Center map on position if tracking
+                if (isTracking) {
+                    map.getView().setCenter(coords);
+                    map.getView().setZoom(17); // Close zoom level for navigation
+                }
+                
+                // Update navigation if active
+                if (isNavigating) {
+                    updateNavigation(position);
+                }
+            });
+        }
+        
+        // Stop GPS tracking
+        function stopTracking() {
+            isTracking = false;
+            gpsTrackBtn.innerHTML = '<i class="fas fa-location-arrow"></i><span>Follow Me</span>';
+            gpsAccuracy.style.display = 'none';
+            
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+        }
+        
+        // Toggle GPS tracking
+        function toggleTracking() {
+            if (isTracking) {
+                stopTracking();
+            } else {
+                startTracking();
+            }
         }
         
         // Search location using Nominatim
@@ -594,18 +717,20 @@
             if (!routeData) return;
             
             isNavigating = true;
-            currentStepIndex = 0;
             
             startNavBtn.style.display = 'none';
             stopNavBtn.style.display = 'block';
             navPopup.style.display = 'block';
             
-            // Set current position to start of route
-            const startCoord = routeData.legs[0].steps[0].maneuver.location;
-            currentPositionMarker.setPosition(ol.proj.fromLonLat(startCoord));
+            // Ensure tracking is on
+            if (!isTracking) {
+                startTracking();
+            }
             
-            // Show first instruction
-            updateNavigationPopup();
+            // Update navigation display
+            if (currentPosition) {
+                updateNavigation(currentPosition);
+            }
         }
         
         // Stop navigation mode
@@ -615,53 +740,117 @@
             startNavBtn.style.display = 'block';
             stopNavBtn.style.display = 'none';
             navPopup.style.display = 'none';
-            
-            // Remove current position marker
-            currentPositionMarker.setPosition(undefined);
         }
         
-        // Update navigation popup with current step
-        function updateNavigationPopup() {
-            if (!isNavigating || !routeData) return;
+        // Update navigation display based on current position
+        function updateNavigation(position) {
+            if (!routeData || !isNavigating) return;
             
-            const step = routeData.legs[0].steps[currentStepIndex];
+            const userCoords = [position.coords.longitude, position.coords.latitude];
             
-            // Update popup content
-            navPopupContent.innerHTML = step.maneuver.instruction;
-            navPopupDistance.innerHTML = `${(step.distance / 1000).toFixed(1)} km to next step`;
+            // Find nearest step on route
+            let nearestStep = null;
+            let minDistance = Infinity;
+            let stepIndex = 0;
             
-            // Highlight current step in instructions list
-            highlightStep(currentStepIndex);
+            // Check each segment of the route
+            for (let i = 0; i < routeData.legs[0].steps.length; i++) {
+                const step = routeData.legs[0].steps[i];
+                const stepCoords = step.maneuver.location;
+                
+                // Calculate distance to this step (simplified haversine)
+                const dx = stepCoords[0] - userCoords[0];
+                const dy = stepCoords[1] - userCoords[1];
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    nearestStep = step;
+                    stepIndex = i;
+                }
+            }
             
-            // Update current position marker
-            currentPositionMarker.setPosition(ol.proj.fromLonLat(step.maneuver.location));
-            
-            // Zoom to current step
-            const coordinates = step.geometry.coordinates;
-            const extent = ol.extent.boundingExtent(
-                coordinates.map(coord => ol.proj.fromLonLat(coord))
-            );
-            map.getView().fit(extent, { padding: [100, 100, 100, 100], maxZoom: 14 });
-        }
-        
-        // Go to next navigation step
-        function nextStep() {
-            if (currentStepIndex < routeData.legs[0].steps.length - 1) {
-                currentStepIndex++;
-                updateNavigationPopup();
-            } else {
-                navPopupContent.innerHTML = "You have arrived at your destination!";
-                navPopupDistance.innerHTML = "";
-                navNextBtn.style.display = 'none';
+            if (nearestStep) {
+                // Calculate distance to destination
+                const remainingCoords = routeData.legs[0].steps
+                    .slice(stepIndex)
+                    .flatMap(step => step.geometry.coordinates);
+                
+                remainingCoords.push([toLocation.lon, toLocation.lat]);
+                
+                let remainingDistance = 0;
+                for (let i = 1; i < remainingCoords.length; i++) {
+                    const dx = remainingCoords[i][0] - remainingCoords[i-1][0];
+                    const dy = remainingCoords[i][1] - remainingCoords[i-1][1];
+                    remainingDistance += Math.sqrt(dx * dx + dy * dy) * 111320; // Convert to meters (approximate)
+                }
+                
+                // Update navigation popup
+                navInstruction.textContent = nearestStep.maneuver.instruction;
+                navDistance.textContent = `${Math.round(remainingDistance/1000 * 10)/10} km to destination`;
+                
+                // Highlight current step in instructions
+                highlightStep(stepIndex);
+                
+                // Auto-center map when getting close to edge
+                const view = map.getView();
+                const extent = view.calculateExtent(map.getSize());
+                const userPixel = map.getPixelFromCoordinate(
+                    ol.proj.fromLonLat(userCoords)
+                );
+                
+                const buffer = 100; // pixels from edge
+                const size = map.getSize();
+                
+                if (userPixel[0] < buffer || 
+                    userPixel[0] > size[0] - buffer || 
+                    userPixel[1] < buffer || 
+                    userPixel[1] > size[1] - buffer) {
+                    view.setCenter(ol.proj.fromLonLat(userCoords));
+                }
             }
         }
         
-        // Go to previous navigation step
-        function prevStep() {
-            if (currentStepIndex > 0) {
-                currentStepIndex--;
-                updateNavigationPopup();
-                navNextBtn.style.display = 'block';
+        // Toggle theme
+        function toggleTheme() {
+            const isDark = map.getLayers().item(0).get('name') === 'dark';
+            
+            if (isDark) {
+                map.getLayers().item(0).setProperties({ name: 'light' });
+                map.getLayers().item(0).setSource(lightLayer.getSource());
+                themeToggle.innerHTML = '<i class="fas fa-moon"></i><span>Night Mode</span>';
+            } else {
+                map.getLayers().item(0).setProperties({ name: 'dark' });
+                map.getLayers().item(0).setSource(darkLayer.getSource());
+                themeToggle.innerHTML = '<i class="fas fa-sun"></i><span>Day Mode</span>';
+            }
+        }
+        
+        // Toggle fullscreen
+        function toggleFullscreen() {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                document.documentElement.requestFullscreen();
+            }
+        }
+        
+        // Swap locations
+        function swapLocations() {
+            if (fromLocation && toLocation) {
+                const temp = fromLocation;
+                fromLocation = toLocation;
+                toLocation = temp;
+                
+                fromInput.value = fromLocation.name;
+                toInput.value = toLocation.name;
+                
+                updateMarkers();
+                
+                // Recalculate route if one exists
+                if (routeData) {
+                    calculateRoute();
+                }
             }
         }
         
@@ -674,26 +863,14 @@
             searchLocation(toInput.value, toResults);
         }));
         
-        swapBtn.addEventListener('click', () => {
-            if (fromLocation && toLocation) {
-                const temp = fromLocation;
-                fromLocation = toLocation;
-                toLocation = temp;
-                
-                fromInput.value = fromLocation.name;
-                toInput.value = toLocation.name;
-                
-                updateMarkers();
-            }
-        });
-        
         calculateBtn.addEventListener('click', calculateRoute);
         startNavBtn.addEventListener('click', startNavigation);
         stopNavBtn.addEventListener('click', stopNavigation);
-        navPopupClose.addEventListener('click', stopNavigation);
-        navPrevBtn.addEventListener('click', prevStep);
-        navNextBtn.addEventListener('click', nextStep);
         navStopBtn.addEventListener('click', stopNavigation);
+        gpsTrackBtn.addEventListener('click', toggleTracking);
+        themeToggle.addEventListener('click', toggleTheme);
+        fullscreenBtn.addEventListener('click', toggleFullscreen);
+        swapBtn.addEventListener('click', swapLocations);
         
         // Hide results when clicking elsewhere
         document.addEventListener('click', (e) => {
@@ -702,6 +879,34 @@
                 toResults.style.display = 'none';
             }
         });
+        
+        // Initialize with current position
+        getCurrentPosition()
+            .then(position => {
+                currentPosition = position;
+                const coords = ol.proj.fromLonLat([
+                    position.coords.longitude,
+                    position.coords.latitude
+                ]);
+                
+                // Set as default "from" location
+                fromLocation = {
+                    name: "Current Location",
+                    lon: position.coords.longitude,
+                    lat: position.coords.latitude
+                };
+                fromInput.value = "Current Location";
+                
+                map.getView().setCenter(coords);
+                map.getView().setZoom(15);
+                
+                // Start with tracking on
+                startTracking();
+            })
+            .catch(error => {
+                console.error('Error getting initial position:', error);
+                alert('Could not get your current location. Please ensure location services are enabled.');
+            });
         
         // Add attribution control
         map.addControl(new ol.control.Attribution({
