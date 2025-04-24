@@ -21,6 +21,7 @@ const themeToggle = document.getElementById('themeToggle');
 function initApp() {
     initMap();
     setupEventListeners();
+    checkSavedTheme();
     checkGeolocationPermission();
     registerServiceWorker();
     listenForInstallPrompt();
@@ -30,13 +31,11 @@ function initApp() {
 function initMap() {
     map = L.map('map').setView([51.505, -0.09], 13);
     
-    // Use OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19,
     }).addTo(map);
     
-    // Add scale control
     L.control.scale({imperial: false}).addTo(map);
 }
 
@@ -45,6 +44,16 @@ function setupEventListeners() {
     // Menu toggle
     menuBtn.addEventListener('click', toggleMenu);
     closeMenuBtn.addEventListener('click', toggleMenu);
+    
+    // Menu items functionality
+    document.querySelectorAll('.menu-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const text = item.querySelector('span').textContent;
+            handleMenuItemClick(text);
+            sideMenu.classList.remove('open');
+        });
+    });
     
     // Search functionality
     searchInput.addEventListener('keyup', (e) => {
@@ -77,48 +86,67 @@ function setupEventListeners() {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            // In a real app, you would switch views here
         });
     });
 }
 
-// Toggle side menu
-function toggleMenu() {
-    sideMenu.classList.toggle('open');
+// Handle menu item clicks
+function handleMenuItemClick(menuText) {
+    switch(menuText) {
+        case 'Search':
+            searchInput.focus();
+            break;
+        case 'Bookmarks':
+            alert('Bookmarks feature will be implemented');
+            break;
+        case 'Download Maps':
+            alert('Map download feature will be implemented');
+            break;
+        case 'Route Planner':
+            alert('Route planner feature will be implemented');
+            break;
+        case 'Navigation':
+            alert('Navigation feature will be implemented');
+            break;
+        case 'Settings':
+            alert('Settings feature will be implemented');
+            break;
+        case 'About':
+            alert('Organic Maps PWA Clone\nVersion 1.0');
+            break;
+    }
 }
 
-// Perform search (simulated)
-function performSearch() {
+// Perform search using Nominatim
+async function performSearch() {
     const query = searchInput.value.trim();
     if (query === '') return;
     
-    // Simulate search results
-    searchResults = [
-        {
-            id: 1,
-            name: `${query} Cafe`,
-            address: '123 Main St, City',
-            lat: 51.505 + Math.random() * 0.01 - 0.005,
-            lng: -0.09 + Math.random() * 0.01 - 0.005
-        },
-        {
-            id: 2,
-            name: `${query} Restaurant`,
-            address: '456 Center Ave, City',
-            lat: 51.505 + Math.random() * 0.01 - 0.005,
-            lng: -0.09 + Math.random() * 0.01 - 0.005
-        },
-        {
-            id: 3,
-            name: `${query} Store`,
-            address: '789 Market St, City',
-            lat: 51.505 + Math.random() * 0.01 - 0.005,
-            lng: -0.09 + Math.random() * 0.01 - 0.005
+    try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        if (data.length === 0) {
+            alert('No results found');
+            return;
         }
-    ];
-    
-    // Display results
-    displaySearchResults();
+        
+        searchResults = data.map(item => ({
+            id: item.place_id,
+            name: item.display_name.split(',')[0],
+            address: item.display_name,
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon),
+            type: item.type,
+            class: item.class
+        }));
+        
+        displaySearchResults();
+        showNearbyFacilities(data[0].lat, data[0].lon);
+    } catch (error) {
+        console.error('Search error:', error);
+        alert('Error performing search');
+    }
 }
 
 // Display search results
@@ -146,20 +174,110 @@ function displaySearchResults() {
 function showLocationOnMap(location) {
     map.setView([location.lat, location.lng], 16);
     
-    // Clear previous markers
-    if (currentLocationMarker) {
-        map.removeLayer(currentLocationMarker);
+    // Clear previous markers except user location and facilities
+    map.eachLayer(layer => {
+        if (layer instanceof L.Marker && layer === currentLocationMarker) {
+            return;
+        }
+        if (layer instanceof L.Marker && layer.options.icon?.options?.className === 'facility-marker') {
+            return;
+        }
+        if (layer instanceof L.Marker) {
+            map.removeLayer(layer);
+        }
+    });
+    
+    // Add new marker if it's not a facility
+    if (!location.icon) {
+        currentLocationMarker = L.marker([location.lat, location.lng]).addTo(map)
+            .bindPopup(`<b>${location.name}</b><br>${location.address}`);
     }
     
-    // Add new marker
-    currentLocationMarker = L.marker([location.lat, location.lng]).addTo(map)
-        .bindPopup(`<b>${location.name}</b><br>${location.address}`)
-        .openPopup();
-    
-    // Show location info
-    document.getElementById('locationTitle').textContent = location.name;
-    document.getElementById('locationAddress').textContent = location.address;
+    // Show location info in bottom panel
+    document.getElementById('locationTitle').textContent = location.name || location.display_name.split(',')[0];
+    document.getElementById('locationAddress').textContent = location.address || location.display_name;
     locationInfoPanel.classList.add('open');
+    
+    // Update navigation button functionality
+    const navButton = document.querySelector('.info-actions .action-btn');
+    navButton.onclick = () => {
+        alert(`Navigation to ${location.name || location.display_name.split(',')[0]} would start here`);
+    };
+}
+
+// Show nearby facilities
+function showNearbyFacilities(lat, lng) {
+    // Define facility types to show
+    const facilityTypes = [
+        { class: 'amenity', type: 'restaurant', icon: 'utensils', color: 'red' },
+        { class: 'amenity', type: 'cafe', icon: 'coffee', color: 'brown' },
+        { class: 'amenity', type: 'pharmacy', icon: 'prescription-bottle', color: 'green' },
+        { class: 'amenity', type: 'hospital', icon: 'hospital', color: 'blue' },
+        { class: 'shop', type: 'supermarket', icon: 'shopping-cart', color: 'orange' },
+        { class: 'amenity', type: 'bank', icon: 'money-bill-wave', color: 'darkgreen' },
+        { class: 'amenity', type: 'fuel', icon: 'gas-pump', color: 'black' }
+    ];
+
+    // Search for each facility type
+    facilityTypes.forEach(async (facility) => {
+        try {
+            const radius = 1000; // 1km radius
+            const response = await fetch(
+                `https://nominatim.openstreetmap.org/search?format=json&lat=${lat}&lon=${lng}&radius=${radius}&${facility.class}=${facility.type}`
+            );
+            const data = await response.json();
+            
+            data.forEach(item => {
+                const icon = L.divIcon({
+                    className: 'facility-marker',
+                    html: `<i class="fas fa-${facility.icon}" style="color:${facility.color}"></i>`,
+                    iconSize: [24, 24],
+                    popupAnchor: [0, -12]
+                });
+                
+                const marker = L.marker([item.lat, item.lon], { icon })
+                    .addTo(map)
+                    .bindPopup(`<b>${item.display_name.split(',')[0]}</b><br>${facility.type}`);
+                    
+                marker.on('click', () => {
+                    const location = {
+                        lat: item.lat,
+                        lng: item.lon,
+                        name: item.display_name.split(',')[0],
+                        address: item.display_name,
+                        icon: true
+                    };
+                    showLocationOnMap(location);
+                });
+            });
+        } catch (error) {
+            console.error(`Error fetching ${facility.type}:`, error);
+        }
+    });
+}
+
+// Handle map click
+function onMapClick(e) {
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${e.latlng.lat}&lon=${e.latlng.lng}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.log('Location not found');
+                return;
+            }
+            
+            const location = {
+                lat: e.latlng.lat,
+                lng: e.latlng.lng,
+                name: data.name || data.display_name.split(',')[0],
+                address: data.display_name
+            };
+            
+            showLocationOnMap(location);
+        })
+        .catch(error => {
+            console.error('Reverse geocoding error:', error);
+        });
 }
 
 // Center map on user location
@@ -170,16 +288,17 @@ function centerMapOnUserLocation() {
                 const { latitude, longitude } = position.coords;
                 map.setView([latitude, longitude], 15);
                 
-                // Clear previous marker
                 if (currentLocationMarker) {
                     map.removeLayer(currentLocationMarker);
                 }
                 
-                // Add new marker
                 currentLocationMarker = L.marker([latitude, longitude])
                     .addTo(map)
                     .bindPopup('Your location')
                     .openPopup();
+                    
+                // Show nearby facilities to user's location
+                showNearbyFacilities(latitude, longitude);
             },
             (error) => {
                 console.error('Error getting location:', error);
@@ -189,12 +308,6 @@ function centerMapOnUserLocation() {
     } else {
         alert('Geolocation is not supported by your browser.');
     }
-}
-
-// Handle map click
-function onMapClick(e) {
-    // In a real app, you might show information about the clicked location
-    console.log('Map clicked at:', e.latlng);
 }
 
 // Toggle dark/light theme
@@ -214,12 +327,12 @@ function checkSavedTheme() {
 
 // Check geolocation permission
 function checkGeolocationPermission() {
-    // In a real app, you might check and request permissions here
+    // Permission check placeholder
 }
 
 // Register service worker
 function registerServiceWorker() {
-    // Already registered in the HTML file
+    // Already registered in HTML
 }
 
 // Listen for PWA install prompt
@@ -253,8 +366,10 @@ function showInstallPrompt() {
     });
 }
 
+// Toggle side menu
+function toggleMenu() {
+    sideMenu.classList.toggle('open');
+}
+
 // Initialize the app when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    checkSavedTheme();
-    initApp();
-});
+document.addEventListener('DOMContentLoaded', initApp);
