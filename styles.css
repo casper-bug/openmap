@@ -410,3 +410,22 @@ input:checked + .slider:before {
     background-color: var(--surface-dark-hover);
     color: var(--text-primary);
 }
+
+.facility-marker {
+    background: rgba(30, 30, 30, 0.7);
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.facility-marker i {
+    font-size: 14px;
+    text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+}
+
+[data-theme="light"] .facility-marker {
+    background: rgba(255, 255, 255, 0.7);
+}
