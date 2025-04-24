@@ -3,57 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenNav</title>
+    <title>Organic Maps PWA</title>
     <meta name="description" content="A privacy-focused, offline-friendly map application">
     <meta name="theme-color" content="#121212">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="app-container">
-        <!-- Top Navigation Bar -->
-        <header class="app-header">
-            <button class="menu-btn" id="menuBtn">
-                <i class="fas fa-bars"></i>
-            </button>
-            <div class="search-container">
-                <input type="text" id="searchInput" placeholder="Search for places...">
-                <button class="search-btn"><i class="fas fa-search"></i></button>
-            </div>
-            <button class="location-btn" id="locationBtn">
-                <i class="fas fa-location-arrow"></i>
-            </button>
-        </header>
-
-        <!-- Main Map Container -->
-        <div id="map"></div>
-
-        <!-- Bottom Navigation Bar -->
-        <nav class="bottom-nav">
-            <button class="nav-btn active" id="mapBtn">
-                <i class="fas fa-map"></i>
-                <span>Map</span>
-            </button>
-            <button class="nav-btn" id="bookmarksBtn">
-                <i class="fas fa-bookmark"></i>
-                <span>Bookmarks</span>
-            </button>
-            <button class="nav-btn" id="downloadsBtn">
-                <i class="fas fa-download"></i>
-                <span>Downloads</span>
-            </button>
-            <button class="nav-btn" id="settingsBtn">
-                <i class="fas fa-cog"></i>
-                <span>Settings</span>
-            </button>
-        </nav>
-
         <!-- Side Menu -->
         <div class="side-menu" id="sideMenu">
             <div class="menu-header">
-                <h3>OpenNav</h3>
+                <h3>Organic Maps</h3>
                 <button class="close-btn" id="closeMenuBtn">
                     <i class="fas fa-times"></i>
                 </button>
@@ -99,6 +62,46 @@
             </div>
         </div>
 
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Top Navigation Bar -->
+            <header class="app-header">
+                <button class="menu-btn" id="menuBtn">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="search-container">
+                    <input type="text" id="searchInput" placeholder="Search for places...">
+                    <button class="search-btn"><i class="fas fa-search"></i></button>
+                </div>
+                <button class="location-btn" id="locationBtn">
+                    <i class="fas fa-location-arrow"></i>
+                </button>
+            </header>
+
+            <!-- Main Map Container -->
+            <div id="map"></div>
+
+            <!-- Bottom Navigation Bar -->
+            <nav class="bottom-nav">
+                <button class="nav-btn active" id="mapBtn">
+                    <i class="fas fa-map"></i>
+                    <span>Map</span>
+                </button>
+                <button class="nav-btn" id="bookmarksBtn">
+                    <i class="fas fa-bookmark"></i>
+                    <span>Bookmarks</span>
+                </button>
+                <button class="nav-btn" id="downloadsBtn">
+                    <i class="fas fa-download"></i>
+                    <span>Downloads</span>
+                </button>
+                <button class="nav-btn" id="settingsBtn">
+                    <i class="fas fa-cog"></i>
+                    <span>Settings</span>
+                </button>
+            </nav>
+        </div>
+
         <!-- Search Results Panel -->
         <div class="search-results" id="searchResults">
             <div class="results-header">
@@ -123,9 +126,9 @@
             <div class="info-content">
                 <p id="locationAddress">123 Main St, City</p>
                 <div class="info-actions">
-                    <button class="action-btn">
+                    <button class="action-btn" id="navigateBtn">
                         <i class="fas fa-directions"></i>
-                        <span>Directions</span>
+                        <span>Navigate</span>
                     </button>
                     <button class="action-btn">
                         <i class="fas fa-bookmark"></i>
@@ -138,6 +141,70 @@
                 </div>
             </div>
         </div>
+
+        <!-- Navigation Start Panel -->
+        <div class="navigation-start" id="navigationStart">
+            <div class="nav-start-header">
+                <h4>Start Navigation</h4>
+                <button class="close-btn" id="closeNavStartBtn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="nav-start-content">
+                <div class="input-group">
+                    <label>From:</label>
+                    <input type="text" id="startLocationInput" placeholder="Enter start location or use current">
+                    <button class="current-location-btn" id="useCurrentLocationBtn">
+                        <i class="fas fa-location-arrow"></i>
+                    </button>
+                </div>
+                <div class="input-group">
+                    <label>To:</label>
+                    <input type="text" id="endLocationInput" readonly>
+                </div>
+                <button class="start-navigation-btn" id="startNavigationBtn">
+                    Start Navigation
+                </button>
+            </div>
+        </div>
+
+        <!-- Navigation Panel -->
+        <div class="navigation-panel" id="navigationPanel">
+            <div class="nav-header">
+                <h4 id="navDestinationName">Destination</h4>
+                <button class="close-btn" id="closeNavBtn">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="progress-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="nav-instructions">
+                <div class="current-step" id="currentInstruction"></div>
+                <div class="next-step" id="nextInstruction"></div>
+            </div>
+            <div class="nav-stats">
+                <div class="stat">
+                    <i class="fas fa-route"></i>
+                    <span id="distanceRemaining"></span>
+                </div>
+                <div class="stat">
+                    <i class="fas fa-clock"></i>
+                    <span id="timeRemaining"></span>
+                </div>
+            </div>
+            <div class="nav-actions">
+                <button class="action-btn" id="stopNavBtn">
+                    <i class="fas fa-stop"></i> End Navigation
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Alert -->
+    <div class="error-alert" id="errorAlert">
+        <i class="fas fa-exclamation-triangle"></i>
+        <span id="errorMessage"></span>
     </div>
 
     <!-- Service Worker Registration -->
@@ -154,6 +221,7 @@
     </script>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
