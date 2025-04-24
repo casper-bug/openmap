@@ -1,6 +1,6 @@
 {
-  "name": "Organic Maps PWA",
-  "short_name": "OrganicMaps",
+  "name": "OpenNav",
+  "short_name": "OpenNav",
   "description": "A privacy-focused, offline-friendly map application",
   "start_url": "/",
   "display": "standalone",
