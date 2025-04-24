@@ -1,8 +1,24 @@
 // Initialize the map
 let map;
 let currentLocationMarker;
+let userPositionMarker;
+let routePolyline;
 let searchResults = [];
 let deferredPrompt;
+let watchId = null;
+
+// Navigation state
+const navigationState = {
+    active: false,
+    route: null,
+    currentStepIndex: 0,
+    userPosition: null,
+    watchId: null,
+    waypoints: [],
+    remainingDistance: 0,
+    remainingTime: 0,
+    destination: null
+};
 
 // DOM Elements
 const menuBtn = document.getElementById('menuBtn');
@@ -15,7 +31,20 @@ const resultsList = document.getElementById('resultsList');
 const locationBtn = document.getElementById('locationBtn');
 const locationInfoPanel = document.getElementById('locationInfo');
 const closeInfoBtn = document.getElementById('closeInfoBtn');
+const navigateBtn = document.getElementById('navigateBtn');
 const themeToggle = document.getElementById('themeToggle');
+const errorAlert = document.getElementById('errorAlert');
+const errorMessage = document.getElementById('errorMessage');
+const navigationStartPanel = document.getElementById('navigationStart');
+const closeNavStartBtn = document.getElementById('closeNavStartBtn');
+const startLocationInput = document.getElementById('startLocationInput');
+const endLocationInput = document.getElementById('endLocationInput');
+const useCurrentLocationBtn = document.getElementById('useCurrentLocationBtn');
+const startNavigationBtn = document.getElementById('startNavigationBtn');
+const navigationPanel = document.getElementById('navigationPanel');
+const closeNavBtn = document.getElementById('closeNavBtn');
+const stopNavBtn = document.getElementById('stopNavBtn');
+const navDestinationName = document.getElementById('navDestinationName');
 
 // Initialize the application
 function initApp() {
@@ -27,15 +56,43 @@ function initApp() {
     listenForInstallPrompt();
 }
 
-// Initialize Leaflet map
+// Initialize Leaflet map with current location
 function initMap() {
-    map = L.map('map').setView([51.505, -0.09], 13);
+    // Default coordinates (London)
+    let defaultLat = 51.505;
+    let defaultLng = -0.09;
+    let defaultZoom = 13;
+
+    // Try to get current location
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                defaultLat = position.coords.latitude;
+                defaultLng = position.coords.longitude;
+                defaultZoom = 15;
+                createMap(defaultLat, defaultLng, defaultZoom);
+                centerMapOnUserLocation();
+            },
+            (error) => {
+                console.error('Error getting location:', error);
+                createMap(defaultLat, defaultLng, defaultZoom);
+            }
+        );
+    } else {
+        createMap(defaultLat, defaultLng, defaultZoom);
+    }
+}
+
+function createMap(lat, lng, zoom) {
+    map = L.map('map').setView([lat, lng], zoom);
     
+    // Use OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         maxZoom: 19,
     }).addTo(map);
     
+    // Add scale control
     L.control.scale({imperial: false}).addTo(map);
 }
 
@@ -75,6 +132,39 @@ function setupEventListeners() {
         locationInfoPanel.classList.remove('open');
     });
     
+    // Navigate button
+    navigateBtn.addEventListener('click', showNavigationStartPanel);
+    
+    // Navigation start panel
+    closeNavStartBtn.addEventListener('click', () => {
+        navigationStartPanel.classList.remove('open');
+    });
+    
+    // Use current location button
+    useCurrentLocationBtn.addEventListener('click', () => {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    startLocationInput.value = "Current Location";
+                    startLocationInput.dataset.lat = position.coords.latitude;
+                    startLocationInput.dataset.lng = position.coords.longitude;
+                },
+                (error) => {
+                    showNavigationAlert('Could not get current location');
+                }
+            );
+        } else {
+            showNavigationAlert('Geolocation not supported');
+        }
+    });
+    
+    // Start navigation button
+    startNavigationBtn.addEventListener('click', startNavigationFromPanel);
+    
+    // Navigation panel
+    closeNavBtn.addEventListener('click', stopNavigation);
+    stopNavBtn.addEventListener('click', stopNavigation);
+    
     // Theme toggle
     themeToggle.addEventListener('change', toggleTheme);
     
@@ -97,22 +187,22 @@ function handleMenuItemClick(menuText) {
             searchInput.focus();
             break;
         case 'Bookmarks':
-            alert('Bookmarks feature will be implemented');
+            showNavigationAlert('Bookmarks feature will be implemented');
             break;
         case 'Download Maps':
-            alert('Map download feature will be implemented');
+            showNavigationAlert('Map download feature will be implemented');
             break;
         case 'Route Planner':
-            alert('Route planner feature will be implemented');
+            showNavigationAlert('Route planner feature will be implemented');
             break;
         case 'Navigation':
-            alert('Navigation feature will be implemented');
+            showNavigationAlert('Navigation feature will be implemented');
             break;
         case 'Settings':
-            alert('Settings feature will be implemented');
+            showNavigationAlert('Settings feature will be implemented');
             break;
         case 'About':
-            alert('Organic Maps PWA Clone\nVersion 1.0');
+            showNavigationAlert('Organic Maps PWA Clone\nVersion 1.0');
             break;
     }
 }
@@ -127,7 +217,7 @@ async function performSearch() {
         const data = await response.json();
         
         if (data.length === 0) {
-            alert('No results found');
+            showNavigationAlert('No results found');
             return;
         }
         
@@ -145,7 +235,7 @@ async function performSearch() {
         showNearbyFacilities(data[0].lat, data[0].lon);
     } catch (error) {
         console.error('Search error:', error);
-        alert('Error performing search');
+        showNavigationAlert('Error performing search');
     }
 }
 
@@ -176,7 +266,7 @@ function showLocationOnMap(location) {
     
     // Clear previous markers except user location and facilities
     map.eachLayer(layer => {
-        if (layer instanceof L.Marker && layer === currentLocationMarker) {
+        if (layer instanceof L.Marker && layer === userPositionMarker) {
             return;
         }
         if (layer instanceof L.Marker && layer.options.icon?.options?.className === 'facility-marker') {
@@ -185,24 +275,26 @@ function showLocationOnMap(location) {
         if (layer instanceof L.Marker) {
             map.removeLayer(layer);
         }
+        if (layer instanceof L.Polyline) {
+            map.removeLayer(layer);
+        }
     });
     
-    // Add new marker if it's not a facility
-    if (!location.icon) {
-        currentLocationMarker = L.marker([location.lat, location.lng]).addTo(map)
-            .bindPopup(`<b>${location.name}</b><br>${location.address}`);
-    }
+    // Add destination marker
+    currentLocationMarker = L.marker([location.lat, location.lng], {
+        icon: L.divIcon({
+            className: 'destination-marker',
+            html: '<i class="fas fa-map-marker-alt"></i>',
+            iconSize: [32, 32],
+            iconAnchor: [16, 32]
+        })
+    }).addTo(map)
+    .bindPopup(`<b>${location.name}</b><br>${location.address}`);
     
-    // Show location info in bottom panel
+    // Update location info panel
     document.getElementById('locationTitle').textContent = location.name || location.display_name.split(',')[0];
     document.getElementById('locationAddress').textContent = location.address || location.display_name;
     locationInfoPanel.classList.add('open');
-    
-    // Update navigation button functionality
-    const navButton = document.querySelector('.info-actions .action-btn');
-    navButton.onclick = () => {
-        alert(`Navigation to ${location.name || location.display_name.split(',')[0]} would start here`);
-    };
 }
 
 // Show nearby facilities
@@ -288,29 +380,307 @@ function centerMapOnUserLocation() {
                 const { latitude, longitude } = position.coords;
                 map.setView([latitude, longitude], 15);
                 
-                if (currentLocationMarker) {
-                    map.removeLayer(currentLocationMarker);
+                if (userPositionMarker) {
+                    map.removeLayer(userPositionMarker);
                 }
                 
-                currentLocationMarker = L.marker([latitude, longitude])
-                    .addTo(map)
-                    .bindPopup('Your location')
-                    .openPopup();
-                    
+                userPositionMarker = L.marker([latitude, longitude], {
+                    icon: L.divIcon({
+                        className: 'user-marker',
+                        html: '<i class="fas fa-user"></i>',
+                        iconSize: [24, 24],
+                        iconAnchor: [12, 12]
+                    }),
+                    zIndexOffset: 1000
+                }).addTo(map).bindPopup('Your position');
+                
                 // Show nearby facilities to user's location
                 showNearbyFacilities(latitude, longitude);
             },
             (error) => {
                 console.error('Error getting location:', error);
-                alert('Could not get your location. Please check your permissions.');
+                showNavigationAlert('Could not get your location. Please check your permissions.');
             }
         );
     } else {
-        alert('Geolocation is not supported by your browser.');
+        showNavigationAlert('Geolocation is not supported by your browser.');
     }
 }
 
-// Toggle dark/light theme
+// Navigation functions
+
+function showNavigationStartPanel() {
+    if (!currentLocationMarker) {
+        showNavigationAlert('Please select a destination first');
+        return;
+    }
+    
+    // Set the end location (destination)
+    endLocationInput.value = document.getElementById('locationTitle').textContent;
+    navigationStartPanel.classList.add('open');
+}
+
+function startNavigationFromPanel() {
+    const destination = {
+        lat: currentLocationMarker.getLatLng().lat,
+        lng: currentLocationMarker.getLatLng().lng,
+        name: document.getElementById('locationTitle').textContent,
+        address: document.getElementById('locationAddress').textContent
+    };
+    
+    // Check if start location is set
+    if (!startLocationInput.value) {
+        showNavigationAlert('Please enter a start location');
+        return;
+    }
+    
+    // If using current location
+    if (startLocationInput.value === "Current Location" && startLocationInput.dataset.lat) {
+        const start = {
+            lat: parseFloat(startLocationInput.dataset.lat),
+            lng: parseFloat(startLocationInput.dataset.lng)
+        };
+        calculateRoute(start, destination);
+    } else {
+        // Geocode the entered address
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(startLocationInput.value)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.length === 0) {
+                    showNavigationAlert('Start location not found');
+                    return;
+                }
+                const start = {
+                    lat: parseFloat(data[0].lat),
+                    lng: parseFloat(data[0].lon)
+                };
+                calculateRoute(start, destination);
+            })
+            .catch(error => {
+                showNavigationAlert('Error finding start location');
+            });
+    }
+}
+
+function calculateRoute(start, destination) {
+    // Use OSRM demo server for routing
+    fetch(`https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.routes && data.routes.length > 0) {
+                startNavigation(data.routes[0], destination);
+            } else {
+                showNavigationAlert('No route found');
+            }
+        })
+        .catch(error => {
+            console.error('Routing error:', error);
+            showNavigationAlert('Error calculating route');
+        });
+}
+
+function startNavigation(route, destination) {
+    // Close start panel
+    navigationStartPanel.classList.remove('open');
+    
+    // Set navigation state
+    navigationState.active = true;
+    navigationState.route = route;
+    navigationState.destination = destination;
+    navigationState.currentStepIndex = 0;
+    navigationState.remainingDistance = route.distance;
+    navigationState.remainingTime = route.duration;
+    
+    // Show route on map
+    showRoute(route);
+    
+    // Start position tracking
+    startPositionTracking();
+    
+    // Show navigation panel
+    showNavigationPanel();
+}
+
+function showRoute(route) {
+    // Remove previous route if any
+    if (routePolyline) {
+        map.removeLayer(routePolyline);
+    }
+    
+    // Add new route
+    routePolyline = L.geoJSON(route.geometry, {
+        style: {
+            color: '#4CAF50',
+            weight: 5,
+            opacity: 0.7
+        }
+    }).addTo(map);
+    
+    // Fit map to route bounds
+    const bounds = routePolyline.getBounds();
+    map.fitBounds(bounds, { padding: [50, 50] });
+}
+
+function startPositionTracking() {
+    if (navigator.geolocation) {
+        navigationState.watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const { latitude, longitude, heading, speed } = position.coords;
+                navigationState.userPosition = {
+                    lat: latitude,
+                    lng: longitude,
+                    heading: heading,
+                    speed: speed
+                };
+                
+                // Update user position marker
+                if (!userPositionMarker) {
+                    userPositionMarker = L.marker([latitude, longitude], {
+                        icon: L.divIcon({
+                            className: 'user-marker',
+                            html: '<i class="fas fa-user"></i>',
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 12]
+                        }),
+                        zIndexOffset: 1000
+                    }).addTo(map).bindPopup('Your position');
+                } else {
+                    userPositionMarker.setLatLng([latitude, longitude]);
+                }
+                
+                // Update navigation
+                updateNavigation();
+                
+                // Auto-pan map to keep user visible
+                map.panTo([latitude, longitude], {
+                    animate: true,
+                    duration: 0.5
+                });
+            },
+            (error) => {
+                console.error('Geolocation error:', error);
+                handleTrackingError(error);
+            },
+            {
+                enableHighAccuracy: true,
+                maximumAge: 5000,
+                timeout: 10000
+            }
+        );
+    } else {
+        showNavigationAlert('Geolocation is not supported by your browser.');
+    }
+}
+
+function updateNavigation() {
+    if (!navigationState.route || !navigationState.userPosition) return;
+    
+    // Convert to Turf.js format
+    const userPoint = turf.point([
+        navigationState.userPosition.lng,
+        navigationState.userPosition.lat
+    ]);
+    
+    const routeLine = turf.lineString(
+        navigationState.route.geometry.coordinates.map(coord => [coord[0], coord[1]])
+    );
+    
+    // Find nearest point on route
+    const nearest = turf.nearestPointOnLine(routeLine, userPoint, { units: 'meters' });
+    
+    // Update remaining distance
+    navigationState.remainingDistance = nearest.properties.dist;
+    
+    // Update UI
+    updateNavigationUI();
+    
+    // Check if arrived
+    if (navigationState.remainingDistance < 50) {
+        showNavigationAlert('You have arrived at your destination');
+        stopNavigation();
+    }
+}
+
+function showNavigationPanel() {
+    navDestinationName.textContent = navigationState.destination.name;
+    navigationPanel.classList.add('open');
+    updateNavigationUI();
+}
+
+function updateNavigationUI() {
+    if (!navigationState.route) return;
+    
+    // Update progress
+    const progress = (navigationState.route.distance - navigationState.remainingDistance) / 
+        navigationState.route.distance * 100;
+    document.getElementById('progressBar').style.width = `${progress}%`;
+    
+    // Update distance and time
+    document.getElementById('distanceRemaining').textContent = 
+        formatDistance(navigationState.remainingDistance);
+    
+    const remainingTime = navigationState.remainingDistance / 
+        (navigationState.userPosition?.speed || 10); // 10 m/s default if speed not available
+    document.getElementById('timeRemaining').textContent = 
+        `${Math.round(remainingTime / 60)} min`;
+    
+    // Update instructions (simplified for this example)
+    document.getElementById('currentInstruction').textContent = 
+        `Continue on route (${formatDistance(navigationState.remainingDistance)} remaining)`;
+}
+
+function stopNavigation() {
+    navigationState.active = false;
+    
+    // Stop position tracking
+    if (navigationState.watchId) {
+        navigator.geolocation.clearWatch(navigationState.watchId);
+        navigationState.watchId = null;
+    }
+    
+    // Remove route from map
+    if (routePolyline) {
+        map.removeLayer(routePolyline);
+        routePolyline = null;
+    }
+    
+    // Close navigation panel
+    navigationPanel.classList.remove('open');
+}
+
+function handleTrackingError(error) {
+    let message = 'Navigation error: ';
+    
+    switch(error.code) {
+        case error.PERMISSION_DENIED:
+            message += 'Location access denied. Please enable location services.';
+            break;
+        case error.POSITION_UNAVAILABLE:
+            message += 'Location information unavailable.';
+            break;
+        case error.TIMEOUT:
+            message += 'Location request timed out.';
+            break;
+        default:
+            message += 'Unknown error occurred.';
+    }
+    
+    showNavigationAlert(message);
+    stopNavigation();
+}
+
+function formatDistance(meters) {
+    if (meters < 50) return `${Math.round(meters)} meters`;
+    if (meters < 1000) return `${Math.round(meters/10)*10} meters`;
+    return `${(meters/1000).toFixed(1)} km`;
+}
+
+// Utility functions
+
+function toggleMenu() {
+    sideMenu.classList.toggle('open');
+}
+
 function toggleTheme() {
     const currentTheme = document.documentElement.getAttribute('data-theme');
     const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
@@ -318,24 +688,30 @@ function toggleTheme() {
     localStorage.setItem('theme', newTheme);
 }
 
-// Check for saved theme preference
 function checkSavedTheme() {
     const savedTheme = localStorage.getItem('theme') || 'dark';
     document.documentElement.setAttribute('data-theme', savedTheme);
     themeToggle.checked = savedTheme === 'dark';
 }
 
-// Check geolocation permission
 function checkGeolocationPermission() {
-    // Permission check placeholder
+    if (navigator.permissions && navigator.permissions.query) {
+        navigator.permissions.query({name: 'geolocation'}).then(result => {
+            if (result.state === 'granted') {
+                console.log('Geolocation permission granted');
+            } else if (result.state === 'prompt') {
+                console.log('Geolocation permission not yet decided');
+            } else {
+                console.log('Geolocation permission denied');
+            }
+        });
+    }
 }
 
-// Register service worker
 function registerServiceWorker() {
     // Already registered in HTML
 }
 
-// Listen for PWA install prompt
 function listenForInstallPrompt() {
     window.addEventListener('beforeinstallprompt', (e) => {
         e.preventDefault();
@@ -344,7 +720,6 @@ function listenForInstallPrompt() {
     });
 }
 
-// Show install prompt
 function showInstallPrompt() {
     const prompt = document.createElement('div');
     prompt.className = 'install-prompt';
@@ -366,9 +741,13 @@ function showInstallPrompt() {
     });
 }
 
-// Toggle side menu
-function toggleMenu() {
-    sideMenu.classList.toggle('open');
+function showNavigationAlert(message) {
+    errorMessage.textContent = message;
+    errorAlert.style.display = 'flex';
+    
+    setTimeout(() => {
+        errorAlert.style.display = 'none';
+    }, 5000);
 }
 
 // Initialize the app when DOM is loaded
